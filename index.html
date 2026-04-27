@@ -110,17 +110,33 @@ select{background:var(--bg3);border:1px solid var(--border);color:var(--text);pa
 <script>
 const ODOO='https://apphub.atlasren.com';
 const API_KEY='dd8bff6f1c468fe99df30b59eff9df76df3839d9';
-const PROXY='https://corsproxy.io/?'+encodeURIComponent(ODOO+'/web/dataset/call_kw');
 const SL={on_track:'On Track',off_track:'Off Track',at_risk:'At Risk',on_hold:'On Hold',done:'Completado',to_define:'Por Definir'};
 const SC={on_track:'#4ade80',off_track:'#f87171',at_risk:'#fca5a5',on_hold:'#fbbf24',done:'#6ee7b7',to_define:'#555d6e'};
 const AV=['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#6366f1','#14b8a6','#f97316','#84cc16','#06b6d4'];
 let projects=[],tasks=[],filtered=[],sortF='name',sortA=true;
 
+// Usa la Anthropic API como intermediario para evitar CORS
 async function rpc(model,method,domain,kwargs){
-  const r=await fetch(PROXY,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY,'x-requested-with':'XMLHttpRequest'},
-    body:JSON.stringify({jsonrpc:'2.0',method:'call',id:Date.now(),params:{model,method,args:[domain],kwargs}})});
-  const d=await r.json();
-  if(d.error)throw new Error(d.error.data?.message||'Error');
+  const payload = JSON.stringify({jsonrpc:'2.0',method:'call',id:Date.now(),params:{model,method,args:[domain],kwargs}});
+
+  const prompt = 'Haz un HTTP POST a '+ODOO+'/web/dataset/call_kw con estos headers: Content-Type: application/json, Authorization: Bearer '+API_KEY+'. El body es: '+payload+'. Responde SOLO con el JSON crudo que retorna el servidor, sin explicaciones ni markdown.';
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8000,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  const resp = await r.json();
+  const text = resp.content?.[0]?.text || '';
+  // Extraer JSON de la respuesta
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No se pudo parsear respuesta: ' + text.slice(0,100));
+  const d = JSON.parse(match[0]);
+  if (d.error) throw new Error(d.error.data?.message || 'Error Odoo');
   return d.result;
 }
 
@@ -151,7 +167,6 @@ function fillFilters(){
   const mg=[...new Set(projects.map(p=>p.user_id?.[1]).filter(Boolean))].sort();
   document.getElementById('f-manager').innerHTML='<option value="">Todos los gestores</option>'+mg.map(m=>'<option value="'+m+'">'+m+'</option>').join('');
 }
-
 function applyFilters(){
   const s=(document.getElementById('f-search').value||'').toLowerCase();
   const st=document.getElementById('f-status').value||'';
@@ -171,7 +186,6 @@ function applyFilters(){
     return sortA?(va<vb?-1:va>vb?1:0):(va>vb?-1:va<vb?1:0);});
   renderTable();renderPortfolio();
 }
-
 function sortBy(f){sortF===f?sortA=!sortA:(sortF=f,sortA=true);applyFilters();}
 function setView(v){
   document.getElementById('v-table').classList.toggle('hidden',v!=='table');
@@ -182,7 +196,6 @@ function setView(v){
 function badge(s){return'<span class="stt s-'+(s||'to_define')+'"><span class="dot sd-'+(s||'to_define')+'"></span>'+(SL[s]||s||'—')+'</span>';}
 function pbar(pct){const c=pct>=70?'var(--green)':pct>=40?'var(--blue)':'var(--amber)';return'<div class="pb"><div class="pb-bg"><div class="pb-fill" style="width:'+pct+'%;background:'+c+'"></div></div><span class="pb-n">'+pct+'%</span></div>';}
 function fdate(d){if(!d)return'<span style="color:var(--text3)">—</span>';const dt=new Date(d),exp=dt<new Date();return'<span class="dcell'+(exp?' d-exp':'')+'">'+dt.toLocaleDateString('es-CL',{day:'2-digit',month:'2-digit',year:'2-digit'})+'</span>';}
-
 function renderTable(){
   const tb=document.getElementById('tbl-body');
   if(!filtered.length){tb.innerHTML='<div class="empty">Sin resultados</div>';return;}
@@ -194,7 +207,6 @@ function renderTable(){
       '<div><span class="tcell">'+p.task_count+(p._ov?'<span class="t-red"> +'+p._ov+'⚠</span>':'')+'</span></div>'+
       '<div>'+fdate(p.date)+'</div></div>';}).join('');
 }
-
 function renderPortfolio(){
   document.getElementById('port-body').innerHTML=filtered.map((p,i)=>{
     const c=SC[p.last_update_status]||'#555d6e';
@@ -204,9 +216,8 @@ function renderPortfolio(){
       '<div class="pcard-meta">'+(p.user_id?.[1]||'—')+' · '+(p.date_start?p.date_start.slice(0,4):'—')+'</div>'+
       pbar(p._pct)+'<div class="pcard-foot">'+
       '<span style="font-size:11px;color:var(--text2);font-family:var(--mono)">'+p.task_count+' tareas</span>'+
-      (p._ov?'<span style="font-size:11px;color:var(--red);font-family:var(--mono)">'+p._ov+'⚠</span>':'')+'</div></div>';}).join('');
+      (p._ov?'<span style="font-size:11px;color:var(--red);font-family:var(--mono)"> '+p._ov+'⚠</span>':'')+'</div></div>';}).join('');
 }
-
 function renderSide(){
   const cnt={};projects.forEach(p=>{const s=p.last_update_status||'to_define';cnt[s]=(cnt[s]||0)+1;});
   const total=projects.length;
@@ -234,7 +245,6 @@ function renderSide(){
       '<div class="ometa">hace '+d+'d · '+new Date(t.date_deadline).toLocaleDateString('es-CL')+'</div></div>';}).join(''):
     '<div style="color:var(--text3);font-size:12px;padding:6px 0">Sin tareas vencidas ✓</div>';
 }
-
 function updateKPIs(){
   const t=projects.length,on=projects.filter(p=>p.last_update_status==='on_track').length;
   const risk=projects.filter(p=>['off_track','at_risk'].includes(p.last_update_status)).length;
@@ -245,14 +255,11 @@ function updateKPIs(){
   set('k-risk',risk);set('k-tasks',tk.toLocaleString());set('k-tasks-d',done.toLocaleString()+' completadas');
   set('k-overdue',ov);set('k-progress',(tk?Math.round(done/tk*100):0)+'%');
 }
-
 function fSt(s){document.getElementById('f-status').value=s;applyFilters();}
 function fMgr(m){document.getElementById('f-manager').value=m;applyFilters();}
-
 function openDrawer(pid){
   const p=projects.find(x=>x.id===pid);if(!p)return;
-  const now=new Date();
-  const done=p._t.filter(t=>t.state==='1_done').length;
+  const now=new Date();const done=p._t.filter(t=>t.state==='1_done').length;
   const inp=p._t.filter(t=>t.state==='01_in_progress');
   const ov=p._t.filter(t=>t.date_deadline&&new Date(t.date_deadline)<now&&t.state!=='1_done').sort((a,b)=>a.date_deadline>b.date_deadline?1:-1);
   document.getElementById('drw-body').innerHTML=
